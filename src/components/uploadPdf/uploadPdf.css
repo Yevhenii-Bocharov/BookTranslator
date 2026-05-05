@@ -1,0 +1,45 @@
+.upload-pdf-container {
+  border: 2px dashed #d1d5db;
+  border-radius: 12px;
+  padding: 40px 20px;
+  text-align: center;
+  background-color: #342e2e;
+  transition: border-color 0.2s ease, background-color 0.2s ease;
+  cursor: pointer;
+  position: relative;
+}
+
+.upload-pdf-container:hover {
+  border-color: #60a5fa;
+  background-color: rgba(96, 165, 250, 0.1);
+}
+
+.upload-pdf-input {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.upload-pdf-label {
+  display: block;
+  font-size: 18px;
+  color: aliceblue;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.upload-pdf-icon {
+  font-size: 48px;
+  color: #d1d5db;
+  margin-bottom: 16px;
+  display: block;
+}
+
+.upload-pdf-text {
+  font-size: 14px;
+  color: #9ca3af;
+}
