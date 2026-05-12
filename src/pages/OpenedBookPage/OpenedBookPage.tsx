@@ -28,9 +28,8 @@ function OpenedBookPage() {
 
   return (
     <>
-      <h1>read book</h1>
-      <h3>{book.name}</h3>
-      <PDFViewer file={book.file} />
+      <h1 style={{ marginLeft: "auto", marginRight: "auto" }}> {book.name}</h1>
+      <PDFViewer file={book.file} bookId={book.id} />
     </>
   );
 }

@@ -1,10 +1,114 @@
+/* ---------------- ROOT LAYOUT ---------------- */
+
+.pdf-root {
+  display: flex;
+  max-height: 100vh;
+  background-color: #342e2e;
+}
+
+/* ---------------- SIDEBAR ---------------- */
+
+.pdf-sidebar {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: #1e1a1a;
+  transition: width 0.25s ease;
+  flex-shrink: 0;
+  z-index: 50;
+}
+
+.pdf-sidebar.open {
+  width: 190px;
+}
+.pdf-sidebar.closed {
+  width: 36px;
+}
+
+.sidebar-toggle {
+  position: sticky;
+  top: 10px;
+  z-index: 10;
+  align-self: flex-end;
+  margin: 10px 6px 6px;
+  background: #333;
+  border: none;
+  color: #ccc;
+  border-radius: 8px;
+  width: 24px;
+  height: 24px;
+  font-size: 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+
+.sidebar-toggle:hover {
+  background: #555;
+}
+
+.thumbnail-list {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.thumbnail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 4px;
+  border: 2px solid transparent;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+
+.thumbnail:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.thumbnail-active {
+  border-color: #6ab0f5;
+  background: rgba(106, 176, 245, 0.1);
+}
+
+.thumbnail canvas {
+  border-radius: 2px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  display: block;
+}
+
+.thumbnail-num {
+  font-size: 10px;
+  color: #888;
+  font-family: "Georgia", serif;
+}
+
+.thumbnail-active .thumbnail-num {
+  color: #6ab0f5;
+}
+
+/* ---------------- MAIN VIEWER ---------------- */
+
 .pdf-viewer-container {
   display: flex;
   flex-direction: column;
   align-items: center;
-  background-color: #2c2c2c;
-  min-height: 100vh;
+  flex: 1;
   padding: 20px;
+  min-width: 0;
+  overflow-y: auto;
 }
 
 /* ---------------- CONTROLS ---------------- */
@@ -22,7 +126,7 @@
   display: flex;
   gap: 15px;
   align-items: center;
-  box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
 }
 
 .pdf-controls button {
@@ -38,10 +142,51 @@
 .pdf-controls button:hover:not(:disabled) {
   background: #666;
 }
-
 .pdf-controls button:disabled {
   opacity: 0.3;
   cursor: not-allowed;
+}
+
+/* ---------------- DUAL PAGE ---------------- */
+
+.pages-wrapper {
+  display: flex;
+  gap: 0;
+}
+.pages-wrapper.dual {
+  gap: 12px;
+}
+
+.dual-page-btn {
+  font-size: 13px;
+}
+.dual-page-btn.active {
+  background: #666 !important;
+  outline: 2px solid rgba(255, 255, 255, 0.3);
+}
+
+/* ---------------- FULLSCREEN ---------------- */
+
+.pdf-root:fullscreen {
+  max-height: 100vh;
+  background-color: #342e2e;
+}
+
+.pdf-root:fullscreen .pdf-viewer-container {
+  overflow-y: auto;
+  height: 100vh;
+}
+
+.pdf-root:fullscreen .thumbnail-list {
+  max-height: calc(100vh - 60px);
+}
+
+.fullscreen-btn {
+  font-size: 13px;
+}
+.fullscreen-btn.active {
+  background: #666 !important;
+  outline: 2px solid rgba(255, 255, 255, 0.3);
 }
 
 /* ---------------- PDF WRAPPER ---------------- */
@@ -60,7 +205,7 @@
   display: block;
   max-width: 100%;
   height: auto !important;
-  pointer-events: none; /* Let clicks fall through to text layer */
+  pointer-events: none;
 }
 
 /* ---------------- TEXT LAYER ---------------- */

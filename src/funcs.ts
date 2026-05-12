@@ -36,3 +36,22 @@ export async function deleteBook(id: string) {
   const db = await dbPromise;
   await db.delete("books", id);
 }
+
+export async function translateWord(
+  word: string,
+  LanguageToTranslateFrom: string,
+  LanguageToTranslateTo: string
+): Promise<string> {
+  const params = new URLSearchParams({
+    q: word,
+    langpair: `${LanguageToTranslateFrom}|${LanguageToTranslateTo}`,
+  });
+
+  const response = await fetch(
+    `https://api.mymemory.translated.net/get?${params}`,
+  );
+  if (!response.ok) throw new Error(`Translation error: ${response.status}`);
+
+  const data = await response.json();
+  return data.responseData.translatedText;
+}
