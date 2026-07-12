@@ -1,5 +1,26 @@
-body{
-  background-color: #342e2e;
-  color: aliceblue;
+:root[data-theme="light"] {
+  --color-bg: #faf7f2;
+  --color-surface: #ffffff;
+  --color-text: #262220;
+  --color-text-muted: #6b6360;
+  --color-border: rgba(0, 0, 0, 0.1);
+  --color-accent: #b2532d;
+  --color-header-bg: #ffffff;
+}
+
+:root[data-theme="dark"] {
+  --color-bg: #201c1c;
+  --color-surface: #2b2626;
+  --color-text: #f0ebe6;
+  --color-text-muted: #b8afa9;
+  --color-border: rgba(255, 255, 255, 0.12);
+  --color-accent: #e08a5b;
+  --color-header-bg: #342e2e;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-text);
   margin: 0;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }

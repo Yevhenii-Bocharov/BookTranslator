@@ -1,0 +1,118 @@
+.gb-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 500;
+  padding: 20px;
+}
+
+.gb-modal {
+  position: relative;
+  background: var(--color-surface);
+  border-radius: 16px;
+  max-width: 640px;
+  width: 100%;
+  max-height: 85vh;
+  overflow-y: auto;
+  padding: 28px;
+}
+
+.gb-modal-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.gb-modal-body {
+  display: flex;
+  gap: 24px;
+}
+
+.gb-modal-cover {
+  flex-shrink: 0;
+  width: 160px;
+  aspect-ratio: 2 / 3;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--color-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.gb-modal-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.gb-modal-info h2 {
+  margin: 0 0 4px;
+  font-size: 20px;
+  color: var(--color-text);
+}
+
+.gb-modal-author {
+  color: var(--color-text-muted);
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.gb-modal-meta {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  margin: 0 0 14px;
+}
+
+.gb-modal-description {
+  font-size: 14px;
+  color: var(--color-text);
+  line-height: 1.5;
+  margin: 0 0 18px;
+}
+
+.gb-modal-error {
+  color: #d64545;
+  font-size: 13px;
+}
+
+.gb-modal-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.gb-btn {
+  padding: 9px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--color-border);
+}
+
+.gb-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.gb-btn-solid {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+}
+
+.gb-btn-outline {
+  background: var(--color-bg);
+  color: var(--color-text);
+}

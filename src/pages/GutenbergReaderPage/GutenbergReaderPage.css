@@ -1,0 +1,59 @@
+.reader-page {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 32px 20px 80px;
+}
+
+.reader-status {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--color-text-muted);
+}
+
+.reader-header {
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 16px;
+}
+
+.reader-header h1 {
+  margin: 0 0 4px;
+  font-size: 24px;
+  color: var(--color-text);
+}
+
+.reader-header p {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.reader-text {
+  font-family: "Georgia", serif;
+  font-size: 18px;
+  line-height: 1.8;
+  color: var(--color-text);
+  white-space: pre-wrap;
+}
+
+.reader-word {
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background-color 0.1s ease;
+}
+
+.reader-word:hover {
+  background-color: var(--color-accent);
+  color: #fff;
+}
+
+.reader-load-more {
+  display: block;
+  margin: 32px auto 0;
+  padding: 10px 24px;
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+  font-size: 14px;
+}
