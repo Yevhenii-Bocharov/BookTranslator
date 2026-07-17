@@ -1,4 +1,3 @@
-import React from "react";
 import Book, { type Book as BookType } from "./Book/Book";
 
 interface BookListProps {

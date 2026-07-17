@@ -61,7 +61,7 @@ async function renderPage(
   textContent.items.forEach((item: any) => {
     if (!item.str || item.str.length === 0) return;
 
-    const [a, b, c, d, e, f] = item.transform;
+    const [a, b, , d, e, f] = item.transform;
     const fontSize = Math.sqrt(b * b + d * d) * viewport.scale;
     const angle = Math.atan2(b, a);
     const baseX = e * viewport.scale;
@@ -110,7 +110,7 @@ async function renderPage(
   const wordGroups: WordGroup[] = [];
   let currentWord: WordGroup = [];
 
-  allChars.forEach((ch, i) => {
+  allChars.forEach((ch) => {
     if (currentWord.length === 0) {
       currentWord.push(ch);
       return;

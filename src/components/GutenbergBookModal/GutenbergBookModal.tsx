@@ -1,7 +1,7 @@
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 import type { GutenbergBook } from "../../lib/gutendex";
-import { authorNames, coverUrl } from "../../lib/gutendex";
+import { authorNames, coverUrl, downloadableFormats } from "../../lib/gutendex";
 import { useReadingList } from "../../hooks/useReadingList";
 import { useAuth } from "../../context/AuthContext";
 import "./GutenbergBookModal.css";
@@ -21,6 +21,7 @@ export default function GutenbergBookModal({ book, onClose }: Props) {
 
   const inList = isInList(book.id);
   const description = book.summaries?.[0] ?? book.subjects.slice(0, 5).join(" · ") ?? null;
+  const downloads = downloadableFormats(book);
 
   const toggleList = async () => {
     setError(null);
@@ -70,6 +71,23 @@ export default function GutenbergBookModal({ book, onClose }: Props) {
                 Read
               </button>
             </div>
+
+            {downloads.length > 0 && (
+              <div className="gb-modal-downloads">
+                <span className="gb-modal-downloads-label">Download:</span>
+                {downloads.map((d) => (
+                  <a
+                    key={d.label}
+                    href={d.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="gb-download-link"
+                  >
+                    {d.label}
+                  </a>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>
