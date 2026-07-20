@@ -1,12 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
-import ePub, { Book, Rendition, Contents } from "epubjs";
 import {
   fetchBook,
   fetchBookText,
-  fetchBookFile,
   plainTextUrl,
-  epubUrl,
   type GutenbergBook,
 } from "../../lib/gutendex";
 import { translateWord } from "../../funcs";
@@ -15,8 +12,7 @@ import { useAuth } from "../../context/AuthContext";
 import { useSettings } from "../../context/SettingsContext";
 import "./GutenbergReaderPage.css";
 
-type ViewMode = "epub" | "text";
-type ThemeMode = "light" | "sepia" | "dark";
+type ThemeMode = "light" | "sepia" | "dark" | "ocean" | "forest";
 type FontStyle = "serif" | "sans" | "mono";
 
 type PopupState = {
@@ -26,6 +22,8 @@ type PopupState = {
   loading: boolean;
   position: { x: number; y: number };
 };
+
+type Page = string[];
 
 function stripBoilerplate(raw: string): string {
   const startMarker =
@@ -44,19 +42,12 @@ function stripBoilerplate(raw: string): string {
   return text.trim();
 }
 
-const THEME_MAP = {
-  light: { bg: "#fcfcfc", fg: "#111827" },
-  sepia: { bg: "#fbf0db", fg: "#433422" },
-  dark: { bg: "#0f141c", fg: "#e2e8f0" },
-};
-
-const FONT_MAP = {
-  serif: '"Georgia", "Times New Roman", serif',
-  sans: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+const FONT_MAP: Record<FontStyle, string> = {
+  serif: '"Source Serif 4", Georgia, "Times New Roman", serif',
+  sans: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   mono: '"SFMono-Regular", Consolas, Menlo, monospace',
 };
 
-// Supported language options
 const SUPPORTED_LANGUAGES = [
   { code: "en", name: "English" },
   { code: "fr", name: "French" },
@@ -68,61 +59,99 @@ const SUPPORTED_LANGUAGES = [
   { code: "ru", name: "Russian" },
 ];
 
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt?");
+}
+
+function extractSentence(paragraph: string, word: string): string {
+  const sentences = paragraph.split(/(?<=[.!?])\s+(?=[A-ZÀ-Ý«"'])/);
+  const lower = word.toLowerCase();
+  const found = sentences.find((s) => s.toLowerCase().includes(lower));
+  return (found ?? paragraph).trim();
+}
+
 export default function GutenbergReaderPage() {
   const { id } = useParams();
   const { user } = useAuth();
   const { profile } = useSettings();
 
+  const containerRef = useRef<HTMLDivElement>(null);
+  const measureRef = useRef<HTMLDivElement>(null);
+
   const [book, setBook] = useState<GutenbergBook | null>(null);
-  const [mode, setMode] = useState<ViewMode>("epub");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Appearance Settings
+  // Appearance Options
   const [theme, setTheme] = useState<ThemeMode>("dark");
   const [fontSize, setFontSize] = useState<number>(18);
   const [fontFamily, setFontFamily] = useState<FontStyle>("serif");
-  const [lineHeight, setLineHeight] = useState<number>(1.8);
+  const [lineHeight, setLineHeight] = useState<number>(1.75);
   const [showSettings, setShowSettings] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
-  // Dynamic Translation Languages
+  // Layout Boundaries
+  const [dualPage, setDualPage] = useState(false);
+  const [pageIndex, setPageIndex] = useState(0);
+  const [initialPageLoaded, setInitialPageLoaded] = useState(false);
+  const [resizeTick, setResizeTick] = useState(0);
+
+  // Translation configuration mappings
   const [sourceLang, setSourceLang] = useState<string>("en");
   const [targetLang, setTargetLang] = useState<string>("fr");
 
-  // Book Buffers
+  // Local document cache
   const [fullText, setFullText] = useState<string | null>(null);
-  const [visibleChars, setVisibleChars] = useState(6000);
-  const [epubBuffer, setEpubBuffer] = useState<ArrayBuffer | null>(null);
-  const [epubLoading, setEpubLoading] = useState(false);
-  const [epubError, setEpubError] = useState<string | null>(null);
+  const [pages, setPages] = useState<Page[]>([]);
+  const [paginating, setPaginating] = useState(false);
 
-  // Saved word collections
+  // Dictionary records state hooks
   const [savedWords, setSavedWords] = useState<Set<string>>(new Set());
   const [recentSaved, setRecentSaved] = useState<
     Array<{ word: string; translation: string }>
   >([]);
   const [popup, setPopup] = useState<PopupState | null>(null);
 
-  const viewerRef = useRef<HTMLDivElement>(null);
-  const epubBookRef = useRef<Book | null>(null);
-  const renditionRef = useRef<Rendition | null>(null);
+  // Sync windowed context constraints for native screen triggers
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () =>
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
 
-  // Sync initial metadata language settings
+  const toggleFullscreen = useCallback(async () => {
+    if (!containerRef.current) return;
+    if (!document.fullscreenElement) {
+      try {
+        await containerRef.current.requestFullscreen();
+      } catch (err) {
+        console.error("Error entering fullscreen mode:", err);
+      }
+    } else {
+      if (document.exitFullscreen) {
+        await document.exitFullscreen();
+      }
+    }
+  }, []);
+
   useEffect(() => {
     if (book) {
       const detected = book.languages[0] || "en";
       setSourceLang(detected);
-
       const appLang = profile?.app_language || "fr";
-      // Ensure source is never identical to target automatically on load
       setTargetLang(
         detected === appLang ? (detected === "en" ? "fr" : "en") : appLang,
       );
     }
   }, [book, profile]);
 
-  // Fetch book metadata
   useEffect(() => {
     if (!id) return;
     setLoading(true);
@@ -131,12 +160,10 @@ export default function GutenbergReaderPage() {
     fetchBook(Number(id))
       .then((b) => {
         setBook(b);
-        const hasEpub = !!epubUrl(b);
-        const hasText = !!plainTextUrl(b);
-        if (!hasEpub && !hasText) {
-          setError("No readable online formats available for this book.");
-        } else {
-          setMode(hasEpub ? "epub" : "text");
+        if (!plainTextUrl(b)) {
+          setError(
+            "No readable plain-text edition is available for this book.",
+          );
         }
         setLoading(false);
       })
@@ -146,35 +173,15 @@ export default function GutenbergReaderPage() {
       });
   }, [id]);
 
-  // Read raw txt fallback file
   useEffect(() => {
-    if (mode !== "text" || !book || fullText !== null) return;
+    if (!book || fullText !== null) return;
     const url = plainTextUrl(book);
     if (!url) return;
     fetchBookText(url)
       .then((raw) => setFullText(stripBoilerplate(raw)))
       .catch(() => setError("Failed to retrieve the plain text file."));
-  }, [mode, book, fullText]);
+  }, [book, fullText]);
 
-  // Fetch epub buffer file
-  useEffect(() => {
-    if (mode !== "epub" || !book || epubBuffer !== null) return;
-    const url = epubUrl(book);
-    if (!url) {
-      setEpubError("No EPUB translation stream found.");
-      return;
-    }
-    setEpubLoading(true);
-    setEpubError(null);
-    fetchBookFile(url)
-      .then((buf) => setEpubBuffer(buf))
-      .catch(() =>
-        setEpubError("EPUB asset stream failed. Please try Plain Text Mode."),
-      )
-      .finally(() => setEpubLoading(false));
-  }, [mode, book, epubBuffer]);
-
-  // Sync persistent saved vocab words
   useEffect(() => {
     if (!user || !id) return;
     supabase
@@ -191,202 +198,178 @@ export default function GutenbergReaderPage() {
       });
   }, [user, id]);
 
-  // 1. Initialize Book and Rendition
+  // Polymorphic Implementation: Fetch positions via type routing boundaries
   useEffect(() => {
-    if (mode !== "epub" || !epubBuffer || !viewerRef.current) return;
-
-    viewerRef.current.innerHTML = "";
-
-    const bookInstance = ePub(epubBuffer);
-    epubBookRef.current = bookInstance;
-
-const rendition = bookInstance.renderTo(viewerRef.current, {
-  width: "100%",
-  height: "100%",
-  spread: "none",
-  flow: "paginated", // Changed from scrolled-doc to prevent overflow
-});
-    renditionRef.current = rendition;
-
-    rendition.display();
-
-    return () => {
-      bookInstance.destroy();
-    };
-  }, [mode, epubBuffer]);
-
-  // 2. Inject CSS Styles Dynamic properties down into iframe
-  useEffect(() => {
-    if (!renditionRef.current) return;
-    const rendition = renditionRef.current;
-    const themeStyles = THEME_MAP[theme];
-    const computedFont = FONT_MAP[fontFamily];
-
-    const applyStyles = (contents: Contents) => {
-      contents.addStylesheetRules({
-        body: {
-          "background-color": `${themeStyles.bg} !important`,
-          color: `${themeStyles.fg} !important`,
-          "font-family": `${computedFont} !important`,
-          "font-size": `${fontSize}px !important`,
-          "line-height": `${lineHeight} !important`,
-          padding: "0 40px !important",
-          transition: "background-color 0.2s ease, color 0.2s ease",
-        },
-        "p, span, li, h1, h2, h3, h4, h5, h6, div, section": {
-          color: `${themeStyles.fg} !important`,
-          "font-family": `${computedFont} !important`,
-        },
-        /* Custom highlight rules injected directly inside the epub document */
-        ".highlight-word-hover": {
-          "background-color": "rgba(59, 130, 246, 0.25) !important",
-          "border-radius": "3px !important",
-          cursor: "pointer !important",
-        },
+    if (!user || !id) return;
+    supabase
+      .from("reading_progress")
+      .select("current_page")
+      .eq("user_id", user.id)
+      .eq("document_type", "gutenberg")
+      .eq("document_id", String(id))
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (data && !error) {
+          setPageIndex(data.current_page);
+        }
+        setInitialPageLoaded(true);
       });
-    };
+  }, [user, id]);
 
-    rendition.getContents().forEach(applyStyles);
-    rendition.hooks.content.register(applyStyles);
-  }, [theme, fontSize, fontFamily, lineHeight, epubBuffer, mode]);
+  // Polymorphic Implementation: Upsert tracking mappings
+  const saveProgress = useCallback(
+    async (targetPage: number) => {
+      if (!user || !id || !initialPageLoaded) return;
 
-  // 3. Iframe mouse-tracking word hover-and-point logic
+      await supabase.from("reading_progress").upsert(
+        {
+          user_id: user.id,
+          document_type: "gutenberg",
+          document_id: String(id),
+          current_page: targetPage,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "user_id, document_type, document_id" },
+      );
+    },
+    [user, id, initialPageLoaded],
+  );
+
   useEffect(() => {
-    if (!renditionRef.current) return;
-    const rendition = renditionRef.current;
-    let lastHighlightedNode: Text | null = null;
-    let wrapperSpan: HTMLSpanElement | null = null;
-
-    const clearActiveHighlight = () => {
-      if (wrapperSpan && wrapperSpan.parentNode) {
-        const parent = wrapperSpan.parentNode;
-        while (wrapperSpan.firstChild) {
-          parent.insertBefore(wrapperSpan.firstChild, wrapperSpan);
-        }
-        parent.removeChild(wrapperSpan);
-        parent.normalize(); // merge text nodes back cleanly
-        wrapperSpan = null;
-        lastHighlightedNode = null;
-      }
+    let t: ReturnType<typeof setTimeout>;
+    const onResize = () => {
+      clearTimeout(t);
+      t = setTimeout(() => setResizeTick((v) => v + 1), 200);
     };
-
-    const handleIframeMouseMove = (event: MouseEvent) => {
-      const doc = event.currentTarget as Document;
-
-      // Cancel tracking if user is actively highlighting text ranges manually
-      const selection = doc.defaultView?.getSelection();
-      if (selection && selection.toString().trim().length > 0) return;
-
-      let range: Range | null = null;
-      if ((doc as any).caretPositionFromPoint) {
-        const pos = (doc as any).caretPositionFromPoint(
-          event.clientX,
-          event.clientY,
-        );
-        if (pos) {
-          range = doc.createRange();
-          range.setStart(pos.offsetNode, pos.offset);
-          range.collapse(true);
-        }
-      } else if (doc.caretRangeFromPoint) {
-        range = doc.caretRangeFromPoint(event.clientX, event.clientY);
-      }
-
-      if (range && range.startContainer.nodeType === Node.TEXT_NODE) {
-        const textNode = range.startContainer as Text;
-        const offset = range.startOffset;
-        const text = textNode.textContent || "";
-
-        // Find precise word boundaries
-        const words = text.split(/(\s+)/);
-        let curPos = 0;
-        let targetWord = "";
-        let wordStartIdx = 0;
-        let wordEndIdx = 0;
-
-        for (const token of words) {
-          if (curPos <= offset && offset <= curPos + token.length) {
-            targetWord = token.replace(/[^\p{L}'-]/gu, "");
-            wordStartIdx = curPos;
-            wordEndIdx = curPos + token.length;
-            break;
-          }
-          curPos += token.length;
-        }
-
-        if (targetWord && textNode !== lastHighlightedNode) {
-          clearActiveHighlight();
-          lastHighlightedNode = textNode;
-
-          // Isolate targeted word and wrap it with dynamic highlight tag
-          const splitRange = doc.createRange();
-          splitRange.setStart(textNode, wordStartIdx);
-          splitRange.setEnd(textNode, wordEndIdx);
-
-          wrapperSpan = doc.createElement("span");
-          wrapperSpan.className = "highlight-word-hover";
-
-          try {
-            splitRange.surroundContents(wrapperSpan);
-          } catch (e) {
-            // Avoid failing if splitting node structures intersects nested markup tags
-          }
-        }
-      } else {
-        clearActiveHighlight();
-      }
-    };
-
-    // If word is clicked inside the iframe
-    const handleIframeClick = (event: MouseEvent) => {
-      if (wrapperSpan) {
-        const targetWordText = wrapperSpan.textContent || "";
-        const parentParagraphText =
-          wrapperSpan.parentElement?.textContent || "";
-        const rect = wrapperSpan.getBoundingClientRect();
-
-        triggerTranslation(
-          targetWordText,
-          parentParagraphText.trim(),
-          event.clientX,
-          rect.bottom + window.scrollY,
-        );
-      }
-    };
-
-    const attachIframeMovementListeners = (contents: Contents) => {
-      const doc = contents.document;
-      doc.body.addEventListener("mousemove", handleIframeMouseMove);
-      doc.body.addEventListener("click", handleIframeClick);
-      doc.body.addEventListener("mouseleave", clearActiveHighlight);
-    };
-
-    rendition.getContents().forEach(attachIframeMovementListeners);
-    rendition.hooks.content.register(attachIframeMovementListeners);
-
+    window.addEventListener("resize", onResize);
     return () => {
-      if (renditionRef.current) {
-        renditionRef.current.off("selected", () => {});
-      }
+      clearTimeout(t);
+      window.removeEventListener("resize", onResize);
     };
-  }, [epubBuffer, mode, sourceLang, targetLang]);
+  }, []);
 
-  // Master translation launcher
+  const paragraphs = useMemo(() => {
+    if (!fullText) return [];
+    return fullText
+      .split(/\n\s*\n/)
+      .map((p) => p.replace(/\s*\n\s*/g, " ").trim())
+      .filter(Boolean);
+  }, [fullText]);
+
+  // HIGHLY OPTIMIZED COMPOSITION ENGINE WITH DEBOUNCED RENDER BUFFER STRATEGY
+  useEffect(() => {
+    if (!fullText || paragraphs.length === 0 || !measureRef.current) return;
+    setPaginating(true);
+
+    const timeoutId = setTimeout(() => {
+      const measureEl = measureRef.current;
+      if (!measureEl) return;
+
+      const calculatedPages: Page[] = [];
+      let currentChunk: string[] = [];
+      const clientHeight = measureEl.clientHeight;
+
+      const commitPage = () => {
+        calculatedPages.push(currentChunk);
+        currentChunk = [];
+      };
+
+      for (let p = 0; p < paragraphs.length; p++) {
+        const paragraph = paragraphs[p];
+        currentChunk.push(paragraph);
+
+        // Batch parsing minimizes standard layouts tracking costs
+        measureEl.innerHTML = currentChunk
+          .map((b) => `<p class="bt-paragraph">${escapeHtml(b)}</p>`)
+          .join("");
+
+        if (measureEl.scrollHeight > clientHeight + 1) {
+          currentChunk.pop();
+          commitPage();
+          currentChunk.push(paragraph);
+        }
+      }
+
+      if (currentChunk.length > 0) commitPage();
+      if (calculatedPages.length === 0) calculatedPages.push([]);
+
+      setPages(calculatedPages);
+      setPaginating(false);
+      setPageIndex((prev) =>
+        Math.min(prev, Math.max(0, calculatedPages.length - 1)),
+      );
+    }, 120);
+
+    return () => clearTimeout(timeoutId);
+  }, [paragraphs, fontSize, lineHeight, fontFamily, dualPage, resizeTick]);
+
+  useEffect(() => {
+    setPageIndex(0);
+    setInitialPageLoaded(false);
+  }, [id]);
+
+  const totalPages = pages.length;
+
+  const goPrev = useCallback(() => {
+    setPageIndex((i) => {
+      const nextIdx = Math.max(0, i - (dualPage ? 2 : 1));
+      saveProgress(nextIdx);
+      return nextIdx;
+    });
+    setPopup(null);
+  }, [dualPage, saveProgress]);
+
+  const goNext = useCallback(() => {
+    setPageIndex((i) => {
+      const step = dualPage ? 2 : 1;
+      const maxIdx = Math.max(0, totalPages - 1);
+      const nextIdx = Math.min(maxIdx, i + step);
+      saveProgress(nextIdx);
+      return nextIdx;
+    });
+    setPopup(null);
+  }, [dualPage, totalPages, saveProgress]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (showSettings || sidebarOpen) return;
+      if (e.key === "ArrowRight") goNext();
+      if (e.key === "ArrowLeft") goPrev();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [goNext, goPrev, showSettings, sidebarOpen]);
+
   const triggerTranslation = async (
     word: string,
-    contextSentence: string,
-    xPos: number,
-    yPos: number,
+    contextParagraph: string,
+    clientX: number,
+    clientY: number,
   ) => {
     const cleanWord = word.replace(/[^\p{L}'-]/gu, "");
     if (!cleanWord) return;
 
+    const CARD_WIDTH = 320;
+    const CARD_HEIGHT = 230;
+    const PADDING = 16;
+
+    const clampedX = Math.max(
+      PADDING,
+      Math.min(clientX, window.innerWidth - CARD_WIDTH - PADDING),
+    );
+    const clampedY = Math.max(
+      PADDING,
+      Math.min(clientY + 12, window.innerHeight - CARD_HEIGHT - PADDING),
+    );
+
+    const sentence = extractSentence(contextParagraph, cleanWord);
+
     setPopup({
       word: cleanWord,
-      sentence: contextSentence,
+      sentence,
       translation: null,
       loading: true,
-      position: { x: Math.min(xPos, window.innerWidth - 340), y: yPos + 12 },
+      position: { x: clampedX, y: clampedY },
     });
 
     try {
@@ -449,24 +432,6 @@ const rendition = bookInstance.renderTo(viewerRef.current, {
     }
   };
 
-  const nextPage = () => {
-    if (renditionRef.current) renditionRef.current.next();
-  };
-
-  const prevPage = () => {
-    if (renditionRef.current) renditionRef.current.prev();
-  };
-
-  const textParagraphs = useMemo(() => {
-    if (!fullText) return [];
-    return fullText.slice(0, visibleChars).split(/\n\s*\n/);
-  }, [fullText, visibleChars]);
-
-  const progressPercentage = useMemo(() => {
-    if (!fullText) return 0;
-    return Math.round((visibleChars / fullText.length) * 100);
-  }, [fullText, visibleChars]);
-
   const speakWord = (word: string) => {
     if ("speechSynthesis" in window) {
       window.speechSynthesis.cancel();
@@ -476,17 +441,53 @@ const rendition = bookInstance.renderTo(viewerRef.current, {
     }
   };
 
-  if (loading)
+  const renderPage = (page: Page | undefined, keyPrefix: string) => {
+    if (!page) return <div className="bt-page-content bt-page-blank" />;
     return (
-      <div className="reader-loading-screen">
-        Preparing dynamic workspace translation layers…
+      <div className="bt-page-content">
+        {page.map((paragraph, pIdx) => {
+          const tokens = paragraph.split(/(\s+)/);
+          return (
+            <p key={`${keyPrefix}-${pIdx}`} className="bt-paragraph">
+              {tokens.map((token, tIdx) => {
+                if (/^\s+$/.test(token) || token === "") {
+                  return <span key={tIdx}>{token}</span>;
+                }
+                const clean = token.replace(/[^\p{L}'-]/gu, "").toLowerCase();
+                const isSaved = savedWords.has(clean);
+                return (
+                  <span
+                    key={tIdx}
+                    className={`bt-word ${isSaved ? "bt-word-saved" : ""}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      triggerTranslation(
+                        token,
+                        paragraph,
+                        e.clientX,
+                        e.clientY,
+                      );
+                    }}
+                  >
+                    {token}
+                  </span>
+                );
+              })}
+            </p>
+          );
+        })}
       </div>
     );
+  };
+
+  if (loading) {
+    return <div className="bt-loading-screen">Opening the book…</div>;
+  }
   if (error) {
     return (
-      <div className="reader-error-screen">
+      <div className="bt-error-screen">
         <p>{error}</p>
-        <Link to="/" className="btn-back">
+        <Link to="/" className="bt-btn-back">
           Return to Library
         </Link>
       </div>
@@ -494,396 +495,305 @@ const rendition = bookInstance.renderTo(viewerRef.current, {
   }
   if (!book) return null;
 
-  const hasEpub = !!epubUrl(book);
-  const hasText = !!plainTextUrl(book);
-  let charIndexOffset = 0;
+  const leftPage = pages[pageIndex];
+  const rightPage = dualPage ? pages[pageIndex + 1] : undefined;
+  const pageLabel = dualPage
+    ? rightPage
+      ? `Pages ${pageIndex + 1}–${pageIndex + 2} of ${totalPages}`
+      : `Page ${pageIndex + 1} of ${totalPages}`
+    : `Page ${pageIndex + 1} of ${totalPages}`;
 
   return (
     <div
-      className={`book-translator-layout theme-${theme}`}
-      style={{ "--reader-font-size": `${fontSize}px` } as React.CSSProperties}
+      ref={containerRef}
+      className={`bt-reader theme-${theme} ${fontFamily}-font`}
+      style={
+        {
+          "--reader-font-size": `${fontSize}px`,
+          "--reader-line-height": lineHeight,
+          "--reader-font-family": FONT_MAP[fontFamily],
+        } as React.CSSProperties
+      }
     >
-      {/* Top Header Navigation */}
-      <header className="translator-header">
-        <div className="header-left">
-          <Link to="/" className="btn-icon" title="Return to Library">
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <path d="M19 12H5M12 19l-7-7 7-7" />
-            </svg>
-          </Link>
-          <div className="book-meta-nav">
-            <span className="brand">Book Translator</span>
-            <span className="divider">/</span>
-            <span className="nav-book-title">{book.title}</span>
-          </div>
-        </div>
-
-        {/* Real-time Dynamic Translation Language Selectors */}
-        <div className="header-center">
-          <div className="header-lang-selector-group">
-            <div className="select-wrapper">
-              <label>Read</label>
-              <select
-                value={sourceLang}
-                onChange={(e) => setSourceLang(e.target.value)}
-              >
-                {SUPPORTED_LANGUAGES.map((lang) => (
-                  <option key={lang.code} value={lang.code}>
-                    {lang.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <svg
-              className="connector-arrow"
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.5"
-            >
-              <path d="M5 12h14M12 5l7 7-7 7" />
-            </svg>
-
-            <div className="select-wrapper">
-              <label>Translate</label>
-              <select
-                value={targetLang}
-                onChange={(e) => setTargetLang(e.target.value)}
-              >
-                {SUPPORTED_LANGUAGES.map((lang) => (
-                  <option key={lang.code} value={lang.code}>
-                    {lang.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-        </div>
-
-        <div className="header-right">
-          <button
-            className={`btn-icon ${sidebarOpen ? "active" : ""}`}
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-            title="Vocabulary sidebar"
-          >
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5V4.5z" />
-            </svg>
-          </button>
-          <button
-            className={`btn-icon ${showSettings ? "active" : ""}`}
-            onClick={() => setShowSettings(!showSettings)}
-            title="Format Styles"
-          >
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-            </svg>
-          </button>
-
-          {showSettings && (
-            <div className="appearance-dropdown">
-              <div className="dropdown-section">
-                <h4>Appearance</h4>
-                <div className="theme-selectors">
-                  <button
-                    className={`theme-btn light ${theme === "light" ? "active" : ""}`}
-                    onClick={() => setTheme("light")}
-                  >
-                    Light
-                  </button>
-                  <button
-                    className={`theme-btn sepia ${theme === "sepia" ? "active" : ""}`}
-                    onClick={() => setTheme("sepia")}
-                  >
-                    Sepia
-                  </button>
-                  <button
-                    className={`theme-btn dark ${theme === "dark" ? "active" : ""}`}
-                    onClick={() => setTheme("dark")}
-                  >
-                    Dark
-                  </button>
-                </div>
-              </div>
-
-              <div className="dropdown-section">
-                <h4>Font Size ({fontSize}px)</h4>
-                <div className="slider-group">
-                  <button
-                    className="stepper-btn"
-                    onClick={() => setFontSize(Math.max(14, fontSize - 1))}
-                  >
-                    A-
-                  </button>
-                  <input
-                    type="range"
-                    min="14"
-                    max="28"
-                    value={fontSize}
-                    onChange={(e) => setFontSize(Number(e.target.value))}
-                  />
-                  <button
-                    className="stepper-btn"
-                    onClick={() => setFontSize(Math.min(28, fontSize + 1))}
-                  >
-                    A+
-                  </button>
-                </div>
-              </div>
-
-              <div className="dropdown-section">
-                <h4>Typography</h4>
-                <div className="font-selectors">
-                  <button
-                    className={fontFamily === "serif" ? "active" : ""}
-                    onClick={() => setFontFamily("serif")}
-                  >
-                    Serif
-                  </button>
-                  <button
-                    className={fontFamily === "sans" ? "active" : ""}
-                    onClick={() => setFontFamily("sans")}
-                  >
-                    Sans
-                  </button>
-                  <button
-                    className={fontFamily === "mono" ? "active" : ""}
-                    onClick={() => setFontFamily("mono")}
-                  >
-                    Mono
-                  </button>
-                </div>
-              </div>
-
-              <div className="dropdown-section">
-                <h4>Line Spacing</h4>
-                <div className="spacing-selectors">
-                  <button
-                    className={lineHeight === 1.5 ? "active" : ""}
-                    onClick={() => setLineHeight(1.5)}
-                  >
-                    1.5x
-                  </button>
-                  <button
-                    className={lineHeight === 1.8 ? "active" : ""}
-                    onClick={() => setLineHeight(1.8)}
-                  >
-                    1.8x
-                  </button>
-                  <button
-                    className={lineHeight === 2.2 ? "active" : ""}
-                    onClick={() => setLineHeight(2.2)}
-                  >
-                    2.2x
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </header>
-
-      {/* Main Container */}
-      <div className="workspace-container">
-        <main
-          className={`reading-pane ${fontFamily}-font`}
-          style={{ lineHeight }}
+      {/* Floating Pill Topbar controls */}
+      <div className="bt-topbar">
+        <Link
+          to="/"
+          className="bt-tb-btn bt-tb-library"
+          title="Go to Home Library"
         >
-          <div className="reading-canvas">
-            {hasEpub && hasText && (
-              <div className="inline-mode-tabs">
-                <button
-                  className={mode === "epub" ? "active" : ""}
-                  onClick={() => setMode("epub")}
-                >
-                  EPUB Mode
-                </button>
-                <button
-                  className={mode === "text" ? "active" : ""}
-                  onClick={() => setMode("text")}
-                >
-                  Plain Text Mode
-                </button>
-              </div>
-            )}
+          Library
+        </Link>
+        <span className="bt-tb-divider" />
 
-            {mode === "epub" && (
-              <div className="epub-stage">
-                {epubLoading && (
-                  <div className="reader-loader">
-                    Importing typography framework...
-                  </div>
-                )}
-                {epubError && (
-                  <div className="reader-stage-error">{epubError}</div>
-                )}
+        <button
+          className="bt-tb-btn"
+          onClick={goPrev}
+          disabled={pageIndex <= 0}
+        >
+          Prev
+        </button>
 
-                {/* Centered sheet wrapper mimicking your reference image */}
-                <div className="epub-page-sheet">
-                  <div ref={viewerRef} className="epub-internal-viewer" />
-                </div>
-              </div>
-            )}
+        <span className="bt-tb-page">
+          {paginating ? "Paginating…" : pageLabel}
+        </span>
 
-            {mode === "text" && (
-              <article className="plain-text-reader">
-                {fullText === null && !error && (
-                  <div className="reader-loader">
-                    Importing raw typography files...
-                  </div>
-                )}
+        <button
+          className="bt-tb-btn"
+          onClick={goNext}
+          disabled={pageIndex >= totalPages - 1}
+        >
+          Next
+        </button>
 
-                {textParagraphs.map((paragraph, pIdx) => {
-                  const tokens = paragraph.split(/(\s+)/);
-                  return (
-                    <p key={pIdx} className="paragraph-block">
-                      {tokens.map((token, tIdx) => {
-                        charIndexOffset += token.length;
+        <span className="bt-tb-divider" />
 
-                        if (/^\s+$/.test(token) || token === "") {
-                          return <span key={tIdx}>{token}</span>;
-                        }
+        <button
+          className={`bt-tb-btn bt-tb-icon ${dualPage ? "active" : ""}`}
+          onClick={() => setDualPage((d) => !d)}
+          title="Two-page spread"
+        >
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <path d="M12 3v18M4 5h6.5a2 2 0 0 1 2 2v13M20 5h-6.5a2 2 0 0 0-2 2v13" />
+          </svg>
+          Dual
+        </button>
 
-                        const clean = token
-                          .replace(/[^\p{L}'-]/gu, "")
-                          .toLowerCase();
-                        const isSaved = savedWords.has(clean);
+        <button
+          className={`bt-tb-btn bt-tb-icon ${showSettings ? "active" : ""}`}
+          onClick={() => setShowSettings((s) => !s)}
+          title="Appearance"
+        >
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </button>
 
-                        return (
-                          <span
-                            key={tIdx}
-                            className={`reader-word-token ${isSaved ? "highlight-saved" : ""}`}
-                            onClick={(e) =>
-                              triggerTranslation(
-                                token,
-                                paragraph,
-                                e.clientX,
-                                e.clientY + window.scrollY,
-                              )
-                            }
-                          >
-                            {token}
-                          </span>
-                        );
-                      })}
-                    </p>
-                  );
-                })}
+        <button
+          className={`bt-tb-btn bt-tb-icon ${sidebarOpen ? "active" : ""}`}
+          onClick={() => setSidebarOpen((s) => !s)}
+          title="Vocabulary"
+        >
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5V4.5z" />
+          </svg>
+        </button>
 
-                {fullText && visibleChars < fullText.length && (
-                  <button
-                    className="reader-load-more"
-                    onClick={() => setVisibleChars((v) => v + 6000)}
-                  >
-                    Load Next Page
-                  </button>
-                )}
-              </article>
-            )}
-          </div>
-        </main>
+        <button
+          className={`bt-tb-btn bt-tb-fullscreen ${isFullscreen ? "active" : ""}`}
+          onClick={toggleFullscreen}
+          title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+        >
+          {isFullscreen ? "Windowed" : "Fullscreen"}
+        </button>
 
-        {/* Collapsible Sidebar */}
-        {sidebarOpen && (
-          <aside className="study-sidebar">
-            <div className="sidebar-section">
-              <h3 className="section-title">Reading Insights</h3>
-              <div className="stats-card">
-                <div className="stats-metric">
-                  <span className="value">{savedWords.size}</span>
-                  <span className="label">Words Saved</span>
-                </div>
-                <div className="stats-metric">
-                  <span className="value">85%</span>
-                  <span className="label">Comprehension</span>
-                </div>
-              </div>
-            </div>
+        <span className="bt-tb-divider" />
 
-            <div className="sidebar-section">
-              <h3 className="section-title">Saved in Book</h3>
-              {recentSaved.length === 0 ? (
-                <div className="empty-history">
-                  <p>
-                    Move mouse pointer over unfamiliar words, then click to
-                    query translations contextually.
-                  </p>
-                </div>
-              ) : (
-                <ul className="vocabulary-quicklist">
-                  {recentSaved.map((item, idx) => (
-                    <li key={idx} className="vocab-item">
-                      <div className="vocab-meta">
-                        <span className="native">{item.word}</span>
-                        <span className="trans">{item.translation}</span>
-                      </div>
-                      <button
-                        className="speak-btn"
-                        onClick={() => speakWord(item.word)}
-                      >
-                        <svg
-                          width="14"
-                          height="14"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                        >
-                          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                          <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
-                        </svg>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </aside>
-        )}
+        <div className="bt-tb-lang-group">
+          <select
+            className="bt-tb-select"
+            value={sourceLang}
+            onChange={(e) => setSourceLang(e.target.value)}
+            title="Book language"
+          >
+            {SUPPORTED_LANGUAGES.map((l) => (
+              <option key={l.code} value={l.code}>
+                {l.name}
+              </option>
+            ))}
+          </select>
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            className="bt-tb-lang-arrow"
+          >
+            <path d="M5 12h14M12 5l7 7-7 7" />
+          </svg>
+          <select
+            className="bt-tb-select"
+            value={targetLang}
+            onChange={(e) => setTargetLang(e.target.value)}
+            title="Translate into"
+          >
+            {SUPPORTED_LANGUAGES.map((l) => (
+              <option key={l.code} value={l.code}>
+                {l.name}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
-      {/* Dynamic Word Translation Modal Card */}
+      {/* Settings Menu Drawer Overlay */}
+      {showSettings && (
+        <div className="bt-settings-panel">
+          <div className="bt-settings-section">
+            <h4>Theme</h4>
+            <div className="bt-settings-grid">
+              <button
+                className={theme === "light" ? "active" : ""}
+                onClick={() => setTheme("light")}
+              >
+                Light
+              </button>
+              <button
+                className={theme === "sepia" ? "active" : ""}
+                onClick={() => setTheme("sepia")}
+              >
+                Sepia
+              </button>
+              <button
+                className={theme === "dark" ? "active" : ""}
+                onClick={() => setTheme("dark")}
+              >
+                Dark
+              </button>
+              <button
+                className={theme === "ocean" ? "active" : ""}
+                onClick={() => setTheme("ocean")}
+              >
+                Ocean
+              </button>
+              <button
+                className={theme === "forest" ? "active" : ""}
+                onClick={() => setTheme("forest")}
+              >
+                Forest
+              </button>
+            </div>
+          </div>
+
+          <div className="bt-settings-section">
+            <h4>Font size ({fontSize}px)</h4>
+            <div className="bt-settings-row">
+              <button onClick={() => setFontSize((f) => Math.max(14, f - 1))}>
+                A-
+              </button>
+              <input
+                type="range"
+                min="14"
+                max="26"
+                value={fontSize}
+                onChange={(e) => setFontSize(Number(e.target.value))}
+              />
+              <button onClick={() => setFontSize((f) => Math.min(26, f + 1))}>
+                A+
+              </button>
+            </div>
+          </div>
+
+          <div className="bt-settings-section">
+            <h4>Typeface</h4>
+            <div className="bt-settings-row">
+              <button
+                className={fontFamily === "serif" ? "active" : ""}
+                onClick={() => setFontFamily("serif")}
+              >
+                Serif
+              </button>
+              <button
+                className={fontFamily === "sans" ? "active" : ""}
+                onClick={() => setFontFamily("sans")}
+              >
+                Sans
+              </button>
+              <button
+                className={fontFamily === "mono" ? "active" : ""}
+                onClick={() => setFontFamily("mono")}
+              >
+                Mono
+              </button>
+            </div>
+          </div>
+
+          <div className="bt-settings-section">
+            <h4>Line spacing</h4>
+            <div className="bt-settings-row">
+              {[1.5, 1.75, 2.1].map((lh) => (
+                <button
+                  key={lh}
+                  className={lineHeight === lh ? "active" : ""}
+                  onClick={() => setLineHeight(lh)}
+                >
+                  {lh}x
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Book Workspace Container */}
+      <div className="bt-stage" onClick={() => setPopup(null)}>
+        <div
+          className={`bt-book-wrapper ${dualPage ? "is-dual" : "is-single"}`}
+        >
+          <div className="bt-book-canvas">
+            {paginating && totalPages === 0 ? (
+              <div className="bt-page-content bt-page-loading">
+                Laying out pages…
+              </div>
+            ) : (
+              renderPage(leftPage, "l")
+            )}
+          </div>
+          {dualPage && (
+            <div className="bt-book-canvas">{renderPage(rightPage, "r")}</div>
+          )}
+        </div>
+      </div>
+
+      {/* Invisible measurements calibration engine */}
+      <div className="bt-book-measure-envelope" aria-hidden="true">
+        <div className="bt-book-canvas">
+          <div className="bt-page-content" ref={measureRef} />
+        </div>
+      </div>
+
+      {/* Word Context Dictionary popovers */}
       {popup && (
         <div
-          className="context-translation-card"
+          className="bt-popup"
           style={{ top: popup.position.y, left: popup.position.x }}
+          onClick={(e) => e.stopPropagation()}
         >
-          <div className="card-header">
-            <span className="target-word">{popup.word}</span>
-            <div className="action-buttons">
+          <div className="bt-popup-header">
+            <span className="bt-popup-word">{popup.word}</span>
+            <div className="bt-popup-actions">
               <button
-                className="speak-btn"
+                className="bt-popup-icon-btn"
                 onClick={() => speakWord(popup.word)}
                 title="Listen"
               >
                 <svg
-                  width="16"
-                  height="16"
+                  width="15"
+                  height="15"
                   viewBox="0 0 24 24"
                   fill="none"
                   stroke="currentColor"
@@ -893,36 +803,38 @@ const rendition = bookInstance.renderTo(viewerRef.current, {
                   <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
                 </svg>
               </button>
-              <button className="close-btn" onClick={() => setPopup(null)}>
+              <button
+                className="bt-popup-icon-btn"
+                onClick={() => setPopup(null)}
+              >
                 ✕
               </button>
             </div>
           </div>
 
-          <div className="card-body">
+          <div className="bt-popup-body">
             {popup.loading ? (
-              <div className="popup-loading">
-                Retrieving translator dictionary definitions...
-              </div>
+              <div className="bt-popup-loading">Translating…</div>
             ) : (
               <>
-                <div className="translation-main">
-                  <span className="lang-code">{targetLang.toUpperCase()}</span>
-                  <p className="translation-result">{popup.translation}</p>
+                <div className="bt-popup-translation">
+                  <span className="bt-popup-lang-code">
+                    {targetLang.toUpperCase()}
+                  </span>
+                  <p>{popup.translation}</p>
                 </div>
-
-                <div className="context-quote">
+                <div className="bt-popup-context">
                   <h5>Context</h5>
-                  <p>"{popup.sentence}"</p>
+                  <p>&ldquo;{popup.sentence}&rdquo;</p>
                 </div>
               </>
             )}
           </div>
 
           {user && !popup.loading && (
-            <div className="card-footer">
+            <div className="bt-popup-footer">
               <button
-                className={`btn-save-word ${savedWords.has(popup.word.toLowerCase()) ? "saved" : ""}`}
+                className={`bt-popup-save ${savedWords.has(popup.word.toLowerCase()) ? "saved" : ""}`}
                 onClick={() =>
                   toggleSaveWord(
                     popup.word,
@@ -940,22 +852,68 @@ const rendition = bookInstance.renderTo(viewerRef.current, {
         </div>
       )}
 
-      {/* bottom Page Navigation & Metadata Footer */}
-      <footer className="reader-footer-toolbar">
-        <div className="footer-left">
-          <button className="nav-btn" onClick={prevPage}>
-            Previous
-          </button>
+      {/* Sliding Vocabulary Sidebar Panel */}
+      <aside className={`bt-sidebar ${sidebarOpen ? "open" : ""}`}>
+        <div className="bt-sidebar-inner">
+          <div className="bt-sidebar-section">
+            <h3>Reading Insights</h3>
+            <div className="bt-stats-card">
+              <div className="bt-stats-metric">
+                <span className="value">{savedWords.size}</span>
+                <span className="label">Words Saved</span>
+              </div>
+              <div className="bt-stats-metric">
+                <span className="value">
+                  {totalPages > 0
+                    ? Math.round(((pageIndex + 1) / totalPages) * 100)
+                    : 0}
+                  %
+                </span>
+                <span className="label">Through Book</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="bt-sidebar-section">
+            <h3>Saved in Book</h3>
+            {recentSaved.length === 0 ? (
+              <div className="bt-empty-history">
+                <p>
+                  Click any word in the text to look up and save its
+                  translation.
+                </p>
+              </div>
+            ) : (
+              <ul className="bt-vocab-list">
+                {recentSaved.map((item, idx) => (
+                  <li key={idx} className="bt-vocab-item">
+                    <div className="bt-vocab-meta">
+                      <span className="native">{item.word}</span>
+                      <span className="trans">{item.translation}</span>
+                    </div>
+                    <button
+                      className="bt-popup-icon-btn"
+                      onClick={() => speakWord(item.word)}
+                    >
+                      <svg
+                        width="13"
+                        height="13"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                      >
+                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
+                      </svg>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </div>
-        <div className="footer-center">
-          <span className="completion-stats">E-Reader Mode</span>
-        </div>
-        <div className="footer-right">
-          <button className="nav-btn" onClick={nextPage}>
-            Next
-          </button>
-        </div>
-      </footer>
+      </aside>
     </div>
   );
 }
