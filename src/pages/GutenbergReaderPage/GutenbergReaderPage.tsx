@@ -25,6 +25,36 @@ type PopupState = {
 
 type Page = string[];
 
+const SETTINGS_STORAGE_KEY = "gutenberg_reader_settings";
+
+interface ReaderSettings {
+  theme: ThemeMode;
+  fontSize: number;
+  fontFamily: FontStyle;
+  lineHeight: number;
+  dualPage: boolean;
+}
+
+const DEFAULT_SETTINGS: ReaderSettings = {
+  theme: "dark",
+  fontSize: 18,
+  fontFamily: "serif",
+  lineHeight: 1.75,
+  dualPage: false,
+};
+
+function getStoredSettings(): ReaderSettings {
+  try {
+    const item = localStorage.getItem(SETTINGS_STORAGE_KEY);
+    if (item) {
+      return { ...DEFAULT_SETTINGS, ...JSON.parse(item) };
+    }
+  } catch (err) {
+    console.warn("Failed to load reader settings from localStorage:", err);
+  }
+  return DEFAULT_SETTINGS;
+}
+
 function stripBoilerplate(raw: string): string {
   const startMarker =
     /\*\*\*\s*START OF (THE|THIS) PROJECT GUTENBERG EBOOK.*?\*\*\*/is;
@@ -63,14 +93,14 @@ function escapeHtml(text: string): string {
   return text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt?");
+    .replace(/>/g, "&gt;");
 }
 
 function extractSentence(paragraph: string, word: string): string {
-  const sentences = paragraph.split(/(?<=[.!?])\s+(?=[A-ZÀ-Ý«"'])/);
+  const sentences = paragraph.split(/(?<=[.!?])\s+/);
   const lower = word.toLowerCase();
   const found = sentences.find((s) => s.toLowerCase().includes(lower));
-  return (found ?? paragraph).trim();
+  return (found ?? paragraph).replace(/\s+/g, " ").trim();
 }
 
 export default function GutenbergReaderPage() {
@@ -85,17 +115,28 @@ export default function GutenbergReaderPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Appearance Options
-  const [theme, setTheme] = useState<ThemeMode>("dark");
-  const [fontSize, setFontSize] = useState<number>(18);
-  const [fontFamily, setFontFamily] = useState<FontStyle>("serif");
-  const [lineHeight, setLineHeight] = useState<number>(1.75);
+  // Appearance Options — initialized directly from localStorage
+  const [theme, setTheme] = useState<ThemeMode>(
+    () => getStoredSettings().theme,
+  );
+  const [fontSize, setFontSize] = useState<number>(
+    () => getStoredSettings().fontSize,
+  );
+  const [fontFamily, setFontFamily] = useState<FontStyle>(
+    () => getStoredSettings().fontFamily,
+  );
+  const [lineHeight, setLineHeight] = useState<number>(
+    () => getStoredSettings().lineHeight,
+  );
+  const [dualPage, setDualPage] = useState<boolean>(
+    () => getStoredSettings().dualPage,
+  );
+
   const [showSettings, setShowSettings] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   // Layout Boundaries
-  const [dualPage, setDualPage] = useState(false);
   const [pageIndex, setPageIndex] = useState(0);
   const [initialPageLoaded, setInitialPageLoaded] = useState(false);
   const [resizeTick, setResizeTick] = useState(0);
@@ -115,6 +156,25 @@ export default function GutenbergReaderPage() {
     Array<{ word: string; translation: string }>
   >([]);
   const [popup, setPopup] = useState<PopupState | null>(null);
+
+  // Persist settings whenever they change
+  useEffect(() => {
+    try {
+      const settingsToSave: ReaderSettings = {
+        theme,
+        fontSize,
+        fontFamily,
+        lineHeight,
+        dualPage,
+      };
+      localStorage.setItem(
+        SETTINGS_STORAGE_KEY,
+        JSON.stringify(settingsToSave),
+      );
+    } catch (err) {
+      console.warn("Failed to persist reader settings to localStorage:", err);
+    }
+  }, [theme, fontSize, fontFamily, lineHeight, dualPage]);
 
   // Sync windowed context constraints for native screen triggers
   useEffect(() => {
@@ -198,7 +258,6 @@ export default function GutenbergReaderPage() {
       });
   }, [user, id]);
 
-  // Polymorphic Implementation: Fetch positions via type routing boundaries
   useEffect(() => {
     if (!user || !id) return;
     supabase
@@ -216,7 +275,6 @@ export default function GutenbergReaderPage() {
       });
   }, [user, id]);
 
-  // Polymorphic Implementation: Upsert tracking mappings
   const saveProgress = useCallback(
     async (targetPage: number) => {
       if (!user || !id || !initialPageLoaded) return;
@@ -256,7 +314,6 @@ export default function GutenbergReaderPage() {
       .filter(Boolean);
   }, [fullText]);
 
-  // HIGHLY OPTIMIZED COMPOSITION ENGINE WITH DEBOUNCED RENDER BUFFER STRATEGY
   useEffect(() => {
     if (!fullText || paragraphs.length === 0 || !measureRef.current) return;
     setPaginating(true);
@@ -278,7 +335,6 @@ export default function GutenbergReaderPage() {
         const paragraph = paragraphs[p];
         currentChunk.push(paragraph);
 
-        // Batch parsing minimizes standard layouts tracking costs
         measureEl.innerHTML = currentChunk
           .map((b) => `<p class="bt-paragraph">${escapeHtml(b)}</p>`)
           .join("");
@@ -375,9 +431,11 @@ export default function GutenbergReaderPage() {
     try {
       const translation = await translateWord(
         cleanWord,
+        sentence,
         sourceLang,
         targetLang,
       );
+
       setPopup((prev) =>
         prev && prev.word === cleanWord
           ? { ...prev, translation, loading: false }
@@ -386,7 +444,7 @@ export default function GutenbergReaderPage() {
     } catch {
       setPopup((prev) =>
         prev && prev.word === cleanWord
-          ? { ...prev, translation: "Unavailable", loading: false }
+          ? { ...prev, translation: "Translation unavailable", loading: false }
           : prev,
       );
     }
@@ -515,7 +573,7 @@ export default function GutenbergReaderPage() {
         } as React.CSSProperties
       }
     >
-      {/* Floating Pill Topbar controls */}
+      {/* Topbar Navigation Controls */}
       <div className="bt-topbar">
         <Link
           to="/"
@@ -650,7 +708,7 @@ export default function GutenbergReaderPage() {
         </div>
       </div>
 
-      {/* Settings Menu Drawer Overlay */}
+      {/* Settings Drawer */}
       {showSettings && (
         <div className="bt-settings-panel">
           <div className="bt-settings-section">
@@ -749,7 +807,7 @@ export default function GutenbergReaderPage() {
         </div>
       )}
 
-      {/* Book Workspace Container */}
+      {/* Book Stage */}
       <div className="bt-stage" onClick={() => setPopup(null)}>
         <div
           className={`bt-book-wrapper ${dualPage ? "is-dual" : "is-single"}`}
@@ -769,14 +827,14 @@ export default function GutenbergReaderPage() {
         </div>
       </div>
 
-      {/* Invisible measurements calibration engine */}
+      {/* Hidden Calibration Container */}
       <div className="bt-book-measure-envelope" aria-hidden="true">
         <div className="bt-book-canvas">
           <div className="bt-page-content" ref={measureRef} />
         </div>
       </div>
 
-      {/* Word Context Dictionary popovers */}
+      {/* Popup Translation Card */}
       {popup && (
         <div
           className="bt-popup"
@@ -852,7 +910,7 @@ export default function GutenbergReaderPage() {
         </div>
       )}
 
-      {/* Sliding Vocabulary Sidebar Panel */}
+      {/* Vocabulary Sidebar */}
       <aside className={`bt-sidebar ${sidebarOpen ? "open" : ""}`}>
         <div className="bt-sidebar-inner">
           <div className="bt-sidebar-section">

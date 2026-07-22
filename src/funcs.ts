@@ -1,57 +1,121 @@
-import { dbPromise } from "./db";
-import { getPdfThumbnail } from "./pdfUtils";
+import { supabase } from "./lib/supabaseClient";
 
-export async function saveBook(file: File) {
-  const db = await dbPromise;
-  let thumbnail: string | undefined = undefined;
+/**
+ * Fetches saved books for a given user from Supabase.
+ */
+export async function getBooks(userId: string) {
+  const { data, error } = await supabase
+    .from("saved_books") // Adjust table name if yours is different
+    .select("*")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false });
 
-  try {
-    thumbnail = await getPdfThumbnail(file);
-  } catch (error) {
-    console.warn("Saving book without thumbnail due to error:", error);
+  if (error) {
+    console.error("Error fetching books:", error);
+    throw error;
   }
 
-  const book = {
-    id: crypto.randomUUID(),
-    name: file.name,
-    file: file,
-    thumbnail: thumbnail,
-  };
-
-  await db.put("books", book);
-  console.log("5. Book entry committed to IndexedDB");
+  return data ?? [];
 }
 
-export async function getBooks() {
-  const db = await dbPromise;
-  return await db.getAll("books");
+/**
+ * Saves or updates a book for a user in Supabase.
+ */
+export async function saveBook(bookData: Record<string, any>, userId: string) {
+  const { data, error } = await supabase
+    .from("saved_books") // Adjust table name if yours is different
+    .upsert(
+      {
+        ...bookData,
+        user_id: userId,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "id, user_id" },
+    )
+    .select();
+
+  if (error) {
+    console.error("Error saving book:", error);
+    throw error;
+  }
+
+  return data;
 }
 
-export async function getBook(id: string) {
-  const db = await dbPromise;
-  return await db.get("books", id);
+/**
+ * Deletes a book for the current user.
+ */
+export async function deleteBook(
+  id: string | number,
+  userId: string,
+): Promise<void> {
+  const { error } = await supabase
+    .from("saved_books") // Adjust table name if yours is different
+    .delete()
+    .eq("id", id)
+    .eq("user_id", userId);
+
+  if (error) {
+    console.error("Error deleting book:", error);
+    throw error;
+  }
 }
 
-export async function deleteBook(id: string) {
-  const db = await dbPromise;
-  await db.delete("books", id);
-}
-
+/**
+ * Translates a single word via MyMemory API.
+ */
 export async function translateWord(
   word: string,
+  sentence: string,
   LanguageToTranslateFrom: string,
-  LanguageToTranslateTo: string
+  LanguageToTranslateTo: string,
 ): Promise<string> {
+  const cleanWord = word.replace(/[^\p{L}'-]/gu, "").trim();
+  if (!cleanWord) return "";
+
   const params = new URLSearchParams({
-    q: word,
-    langpair: `${LanguageToTranslateFrom}|${LanguageToTranslateTo}`,
+    q: cleanWord,
+    langpair: `${LanguageToTranslateFrom.toLowerCase()}|${LanguageToTranslateTo.toLowerCase()}`,
   });
 
-  const response = await fetch(
-    `https://api.mymemory.translated.net/get?${params}`,
-  );
-  if (!response.ok) throw new Error(`Translation error: ${response.status}`);
+  try {
+    const response = await fetch(
+      `https://api.mymemory.translated.net/get?${params}`,
+    );
 
-  const data = await response.json();
-  return data.responseData.translatedText;
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const resultText = data.responseData?.translatedText;
+
+    if (
+      !resultText ||
+      resultText.includes("INVALID SOURCE LANGUAGE") ||
+      resultText.includes("IS AN INVALID") ||
+      (resultText.toUpperCase() === cleanWord.toUpperCase() &&
+        LanguageToTranslateFrom.toLowerCase() !==
+          LanguageToTranslateTo.toLowerCase())
+    ) {
+      const fallbackParams = new URLSearchParams({
+        q: cleanWord.toLowerCase(),
+        langpair: `${LanguageToTranslateFrom.toLowerCase()}|${LanguageToTranslateTo.toLowerCase()}`,
+      });
+      const fallbackRes = await fetch(
+        `https://api.mymemory.translated.net/get?${fallbackParams}`,
+      );
+      const fallbackData = await fallbackRes.json();
+      const fallbackText = fallbackData.responseData?.translatedText;
+
+      if (fallbackText && !fallbackText.includes("INVALID")) {
+        return fallbackText;
+      }
+    }
+
+    return resultText ?? cleanWord;
+  } catch (err) {
+    console.error("Translation API failure:", err);
+    return cleanWord;
+  }
 }
